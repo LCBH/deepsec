@@ -54,13 +54,13 @@ struct
 
     (****** The workers' main function ******)
 
-    let check_request = ref false
+    let check_request = ref (Unix.time ())
 
-    let _ = Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> check_request := true))
+    (*let _ = Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> check_request := true))*)
 
     (** The stdin should be non blocking *)
     let is_request_received () =
-      if !check_request
+      if Unix.time () -. !check_request > 2.
       then
         begin
           begin try
@@ -69,7 +69,7 @@ struct
               | _ -> Config.internal_error "[distrib.ml] The worker should not receive a compute job request at that moment."
             end
           with
-            | Sys_blocked_io -> ignore (Unix.alarm 2); false
+            | Sys_blocked_io -> check_request := Unix.time (); false
           end
         end
       else false
@@ -80,8 +80,7 @@ struct
       Unix.clear_nonblock Unix.stdin;
       let _ = input_value stdin in
       Unix.set_nonblock Unix.stdin;
-      check_request := false;
-      ignore (Unix.alarm 2)
+      check_request := Unix.time ()
 
 
       (*check_request := false;
