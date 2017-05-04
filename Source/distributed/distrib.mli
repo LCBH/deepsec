@@ -23,11 +23,11 @@ sig
   (** The function [evaluation job] will be run the child processes. The argument [job] is read from the standard input channel, i.e., [stdin]
       of the child process and the result is output on its standard channel, i.e. [stdout]. Note that for this reasons, it is important
       that the function [evaluation] never write or read anything respectively on its standard output channel and from its standard input channel. *)
-  val evaluation : job -> result
+  val evaluation : (unit -> bool) -> (job list -> unit) -> job -> result
 
   (** Upon receiving a result [r] from a child process, the master process will run [digest r job_l] where [job_l] is the reference toward the list of jobs.
       The purpose of this function is to allow the master process to update the job lists depending of the result it received from the child processes. *)
-  val digest : result -> job list ref -> command
+  val digest : result -> command
 end
 
 (** This functor build a module to distribute the computation based on one task*)

@@ -15,9 +15,9 @@ module EquivJob : sig
 
   val initialise : shareddata -> unit
 
-  val evaluation : job -> result
+  val evaluation : (unit -> bool) -> (job list -> unit) -> job -> result
 
-  val digest : result -> job list ref -> command
+  val digest : result -> command
 end
 
 module DistribEquivalence : sig

@@ -40,7 +40,7 @@ struct
 
   let result_equivalence = ref Equivalent
 
-  let evaluation job =
+  let evaluation rcv_req send_jobs job =
     Variable.set_up_counter job.variable_counter;
     Name.set_up_counter job.name_counter;
     Symbol.set_up_signature
@@ -56,7 +56,19 @@ struct
     Config.display_trace := job.display_trace;
 
     let rec apply_rules csys_set frame_size f_next =
-      Equivalence.apply_one_transition_and_rules_for_trace_equivalence job.chosen_semantics csys_set frame_size apply_rules f_next
+      if rcv_req ()
+      then
+        begin
+          let job_list = ref [] in
+          Equivalence.apply_one_transition_and_rules_for_trace_equivalence job.chosen_semantics csys_set frame_size (fun csys_set_1 frame_size_1 f_next_1 ->
+            job_list := { job with csys_set = csys_set_1; frame_size = frame_size_1; name_counter = Name.get_counter (); variable_counter = Variable.get_counter () } :: !job_list;
+            f_next_1 ();
+            ) (fun () -> ());
+          send_jobs !job_list;
+          f_next ();
+        end
+      else
+        Equivalence.apply_one_transition_and_rules_for_trace_equivalence job.chosen_semantics csys_set frame_size apply_rules f_next
     in
 
     try
@@ -65,7 +77,7 @@ struct
     with
       | Equivalence.Not_Trace_Equivalent csys -> Not_Equivalent (csys, job.init_proc1, job.init_proc2)
 
-  let digest result _ = match result with
+  let digest result = match result with
     | Equivalent -> Continue
     | Not_Equivalent (csys, init_proc1, init_proc2) -> result_equivalence := Not_Equivalent (csys, init_proc1, init_proc2); Kill
 end
@@ -76,25 +88,6 @@ module DistribEquivalence = Distrib.Distrib(EquivJob)
 let minimum_nb_of_jobs = ref 100
 
 let trace_equivalence semantics proc1 proc2 =
-
-  let current_jobs = ref [] in
-  let size_current_jobs = ref 0 in
-  let tmp_jobs = ref [] in
-  let size_tmp_jobs = ref 0 in
-
-  let rec generate_jobs = function
-    | [] -> ()
-    | jobs_list when !size_tmp_jobs > !minimum_nb_of_jobs ->
-        tmp_jobs := List.rev_append jobs_list !tmp_jobs;
-        size_tmp_jobs := (List.length jobs_list) + !size_tmp_jobs
-    | (csys_set,frame_size)::q ->
-        Equivalence.apply_one_transition_and_rules_for_trace_equivalence semantics csys_set frame_size
-          (fun csys_set_1 frame_size_1 f_next_1 ->
-            tmp_jobs := (csys_set_1,frame_size_1) :: !tmp_jobs;
-            incr size_tmp_jobs;
-            f_next_1 ()
-          ) (fun () -> generate_jobs q)
-  in
 
   (*** Generate the initial constraint systems ***)
 
@@ -120,27 +113,47 @@ let trace_equivalence semantics proc1 proc2 =
   let csys_set_1 = Constraint_system.Set.add csys_1 Constraint_system.Set.empty in
   let csys_set_2 = Constraint_system.Set.add csys_2 csys_set_1 in
 
-  current_jobs := [csys_set_2,0];
-  incr size_current_jobs;
+  let setting = Symbol.get_settings () in
 
+  let initial_job =
+    {
+      EquivJob.cst = setting.Term.Symbol.cst;
+      EquivJob.variable_counter = Variable.get_counter ();
+      EquivJob.name_counter = Name.get_counter ();
+      EquivJob.all_tuples = setting.Term.Symbol.all_t;
+      EquivJob.all_projections = setting.Term.Symbol.all_p;
+      EquivJob.all_constructors = setting.Term.Symbol.all_c;
+      EquivJob.all_destructors = setting.Term.Symbol.all_d;
+      EquivJob.number_of_constructors = setting.Term.Symbol.nb_c;
+      EquivJob.number_of_destructors = setting.Term.Symbol.nb_d;
 
+      EquivJob.chosen_semantics = semantics;
+      EquivJob.display_trace = !Config.display_trace;
+
+      EquivJob.init_proc1 = proc1;
+      EquivJob.init_proc2 = proc2;
+
+      EquivJob.csys_set = csys_set_2;
+      EquivJob.frame_size = 0;
+    }
+  in
+
+  Printf.printf "Starting distributed computing...\n%!";
   (**** Generate the initial jobs ****)
 
-  while !size_current_jobs < !minimum_nb_of_jobs && !current_jobs <> [] do
-    begin try
-      generate_jobs !current_jobs;
-      current_jobs := !tmp_jobs;
-      size_current_jobs := !size_tmp_jobs;
-      tmp_jobs := [];
-      size_tmp_jobs := 0
-    with
-      | Equivalence.Not_Trace_Equivalent csys ->
-          EquivJob.result_equivalence := EquivJob.Not_Equivalent (csys, proc1, proc2);
-          current_jobs := []
-    end
-  done;
+  let job_list = ref [] in
+  begin try
+    Equivalence.apply_one_transition_and_rules_for_trace_equivalence semantics csys_set_2 0 (fun csys_set_1 frame_size_1 f_next_1 ->
+      job_list := { initial_job with EquivJob.csys_set = csys_set_1; EquivJob.frame_size = frame_size_1; EquivJob.name_counter = Name.get_counter (); EquivJob.variable_counter = Variable.get_counter () } :: !job_list;
+      f_next_1 ();
+      ) (fun () -> ());
+  with
+    | Equivalence.Not_Trace_Equivalent csys ->
+        EquivJob.result_equivalence := EquivJob.Not_Equivalent (csys, proc1, proc2);
+        job_list := []
+  end;
 
-  if !current_jobs = []
+  if !job_list = []
   then
     (**** The verification has already been completed by the server ****)
     match !EquivJob.result_equivalence with
@@ -148,47 +161,12 @@ let trace_equivalence semantics proc1 proc2 =
       | EquivJob.Not_Equivalent (csys, init_proc1, init_proc2) -> ((Equivalence.Not_Equivalent csys), init_proc1, init_proc2)
   else
     begin
-      (**** Create the jobs ****)
 
-      let setting = Symbol.get_settings () in
-      let v_counter = Variable.get_counter () in
-      let n_counter = Name.get_counter () in
-
-
-      let jobs_list =
-        List.fold_left (fun acc (csys_set,frame_size) ->
-          let job =
-            {
-              EquivJob.cst = setting.Term.Symbol.cst;
-              EquivJob.variable_counter = v_counter;
-              EquivJob.name_counter = n_counter;
-              EquivJob.all_tuples = setting.Term.Symbol.all_t;
-              EquivJob.all_projections = setting.Term.Symbol.all_p;
-              EquivJob.all_constructors = setting.Term.Symbol.all_c;
-              EquivJob.all_destructors = setting.Term.Symbol.all_d;
-              EquivJob.number_of_constructors = setting.Term.Symbol.nb_c;
-              EquivJob.number_of_destructors = setting.Term.Symbol.nb_d;
-
-              EquivJob.chosen_semantics = semantics;
-              EquivJob.display_trace = !Config.display_trace;
-
-              EquivJob.init_proc1 = proc1;
-              EquivJob.init_proc2 = proc2;
-
-              EquivJob.csys_set = csys_set;
-              EquivJob.frame_size = frame_size;
-            }
-          in
-          job::acc
-        ) [] !current_jobs
-      in
-
-      Printf.printf "Starting distributed computing...\n";
-      Printf.printf "Number of sets of constraint systems generated : %d\n" (List.length jobs_list);
+      Printf.printf "Distributing initial jobs...\n%!";
 
       (**** Launch the jobs in parallel ****)
 
-      DistribEquivalence.compute_job () jobs_list;
+      DistribEquivalence.compute_job () !job_list;
 
       (**** Return the result of the computation ****)
 
