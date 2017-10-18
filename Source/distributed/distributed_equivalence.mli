@@ -47,7 +47,7 @@ end
 module DistribEquivalence : sig
 
   val display_workers : unit -> string
-    
+
   (** Corresponds to the minimum number of jobs initially generated before distribution. Note that this number is necessarily bigger than
       the number of workers launched. Its initial value is 100. *)
   val minimum_nb_of_jobs : int ref
@@ -57,6 +57,8 @@ module DistribEquivalence : sig
       is run. Note that executing [local_workers] multiple times adds up the values, i.e. [local_workers 2; local_workers 5] is
       equivalent to [local_workers 7]. *)
   val local_workers : int -> unit
+
+  val time_between_round : float ref
 
   (** [add_distant_worker machine path n] allows you to specify additional worker that are not located in the DeepSec distribution
       of the server and that will be accessed through and ssh connexion. In particular, [machine] should correspond to the adress
